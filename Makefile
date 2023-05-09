@@ -31,7 +31,6 @@ $(BIN): $(addprefix $(INPUT_DIR)/, $(SRCS))
 	$(ASM) $(ASMFLAGS) -o$@ $^
 	mv $(OUTPUT_DIR)/*_TEXT.bin $(OUTPUT_DIR)/$@
 	z88dk.z88dk-dis -mz80 -o 0x4000 -x $(OUTPUT_DIR)/zepto.map $(OUTPUT_DIR)/$@ > $(OUTPUT_DIR)/zepto.dump
-	python3 ../../dump_text_to_js.py bin/zepto.dump > bin/main.dump.js
 
 $(OUTPUT_DIR):
 	mkdir -p $@
