@@ -19,6 +19,10 @@ ASM = z88dk-z80asm
 # Assembler flags
 ASMFLAGS = -m -b -I$(ZOS_INCLUDE) -O$(OUTPUT_DIR)
 
+# If z88dk has been install through snap, the binary may be prefixed with "z88dk"
+# So choose any of z88dk-dis or z88dk.z88dk-dis, as long as one exists
+DISASSEMBLER=$(shell which z88dk-dis z88dk.z88dk-dis | head -1)
+
 # Mark version.txt as PHONY to force generating it every time
 .PHONY: all version.txt
 
@@ -30,7 +34,7 @@ version.txt:
 $(BIN): $(addprefix $(INPUT_DIR)/, $(SRCS))
 	$(ASM) $(ASMFLAGS) -o$@ $^
 	mv $(OUTPUT_DIR)/*_TEXT.bin $(OUTPUT_DIR)/$@
-	z88dk.z88dk-dis -mz80 -o 0x4000 -x $(OUTPUT_DIR)/zepto.map $(OUTPUT_DIR)/$@ > $(OUTPUT_DIR)/zepto.dump
+	$(DISASSEMBLER) -mz80 -o 0x4000 -x $(OUTPUT_DIR)/zepto.map $(OUTPUT_DIR)/$@ > $(OUTPUT_DIR)/zepto.dump
 
 $(OUTPUT_DIR):
 	mkdir -p $@
