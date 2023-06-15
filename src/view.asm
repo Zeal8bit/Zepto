@@ -29,8 +29,8 @@
 
     ; Parameters:
     ;   DE - String containing the file name to open, NULL else
-    PUBLIC _editor_view_init
-_editor_view_init:
+    PUBLIC editor_view_init
+editor_view_init:
     ; Copy the filename
     ld a, d
     or e

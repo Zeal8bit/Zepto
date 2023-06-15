@@ -36,19 +36,33 @@
 
     ; Text buffer address (RAM bank)
     DEFC BUFFER_START_ADDRESS = _start_buffer
-    DEFC BUFFER_MAX_SIZE = 32*1024
-    DEFC BUFFER_END_ADDRESS = _start_buffer + BUFFER_MAX_SIZE - 1
+    ; DEFC BUFFER_MAX_SIZE = 32*1024
+    ; DEFC BUFFER_END_ADDRESS = _start_buffer + BUFFER_MAX_SIZE - 1
     DEFC BUFFER_MAX_LINE_LENGTH = 0xFFFF
 
     DEFC EDITOR_MAX_LINE = (40 - 1) - 4
 
+    ; Set the end memory address. Used to determine how many bytes our work
+    ; buffer will have.
+    ; It also determines how big can be the file we are going to work on can be.
+    ; Parameters:
+    ;   HL - End of memory address (last usable byte)
+    PUBLIC editor_set_end_memory
+editor_set_end_memory:
+    ; The last byte will be a '\n' to simplify the calculations, so reserve one byte
+    dec hl
+    ld (_buffer_memory_end), hl
+    ret
+
+
+    ; Initialize the buffers and read the file if any was given.
     ; Parameters:
     ;   DE - File name to open
-    PUBLIC _editor_model_init
-_editor_model_init:
+    PUBLIC editor_model_init
+editor_model_init:
     ld hl, _start_buffer
     ld (_buffer_left_addr), hl
-    ld hl, BUFFER_END_ADDRESS
+    ld hl, (_buffer_memory_end)
     ld (_buffer_right_addr), hl
     ; To simplify the calculations for the last line, add a final \n
     inc hl
@@ -85,8 +99,14 @@ _editor_model_init:
     ld e, (hl)
     inc hl
     ld d, (hl)
-    ; DE contains the size of the file
-    ld hl, BUFFER_MAX_SIZE
+    ; DE contains the size of the file, calculate the maximum file size in HL:
+    ; HL = BUFFER_END_ADDRESS - _start_buffer + 1
+    ; BC is free to use here
+_free_size:
+    ld bc, -_start_buffer + 1
+    ld hl, (_buffer_memory_end)
+    add hl, bc
+    ; HL now contains the maximum number of bytes
     sbc hl, de  ; C is 0 already
     jp c, _editor_model_init_error
     ; TODO: check if the entry is a directory (once d_flags is part of stat structure)
@@ -113,7 +133,7 @@ _editor_model_init:
     ; TODO: Support copying to the next buffers
     jp nz, _editor_model_open_error
     ; Copy the file content to the end of the buffer
-    ld de, BUFFER_END_ADDRESS
+    ld de, (_buffer_memory_end)
     ; Copy the file size (number of bytes to copy) in BC
     ld b, h
     ld c, l
@@ -135,7 +155,8 @@ _model_lines_show_loop:
     ; Put next line address in DE
     ex de, hl
     ; We can continue if the address of the next line is not the end
-    ld hl, BUFFER_END_ADDRESS - 1    ; - 1 because we want C to be set if equal
+    ld hl, (_buffer_memory_end)
+    dec hl  ; - 1 because we want C to be set if equal
     sbc hl, de
     jr c, _model_lines_show_loop_end
     ; Do not print the line to the screen if we reached the end of the screen
@@ -437,7 +458,7 @@ _buffer_previous_char:
 _buffer_next_char:
     ; Same as the previous routine but with right cursor
     ld de, (_buffer_right_addr)
-    ld hl, BUFFER_END_ADDRESS
+    ld hl, (_buffer_memory_end)
     ; Clear carry flag
     or a
     ; 16-bit 'add' doesn't update Z flag
@@ -890,7 +911,7 @@ model_save_file:
     ; Get back the opened descriptor
     ld a, d
     ; Save for the right buffer now
-    ld de, BUFFER_END_ADDRESS
+    ld de, (_buffer_memory_end)
     ld hl, (_buffer_right_addr)
     ex de, hl
     sbc hl, de  ; carry flag is already 0
@@ -1118,3 +1139,5 @@ _buffer_line_count: DEFS 2
 _buffer_left_addr: DEFS 2
     ; Same but for the RIGHT cursor
 _buffer_right_addr: DEFS 2
+    ; Last valid memory address, in other words, maximum value of _buffer_right_addr
+_buffer_memory_end: DEFS 2

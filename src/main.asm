@@ -13,8 +13,9 @@
     ; Program part
 
 
-    EXTERN _editor_view_init
-    EXTERN _editor_model_init
+    EXTERN editor_set_end_memory
+    EXTERN editor_view_init
+    EXTERN editor_model_init
     EXTERN model_show_location
     EXTERN model_save_file
     EXTERN _buffer_insert_char_at_cursor
@@ -30,16 +31,30 @@
     DEFC FLAGS_SHIFT_MASK = 1 << 1
     DEFC FLAGS_CTRL_MASK  = 1 << 2
 
+    ; Entry point of the program
+    ; Parameters:
+    ;   DE - String parameter (NULL-terminated), must be ignored if BC is 0
+    ;   BC - Length of the string parameter
     SECTION TEXT
 _start:
+    ; Before processing any parameter, let's estimate the size of free RAM we have.
+    ; As this program can be executed on a target than has no MMU, the stack pointer
+    ; may not be 0xFFFF. So, we need to calculate the last byte address of memory.
+    ld hl, 0
+    add hl, sp
+    ; Allocate 256 bytes for the stack, should be enough, if any problem is encountered, it
+    ; should be increased.
+    dec h
+    dec hl
+    call editor_set_end_memory
     ; Process the argument if any
     call process_argument
     push de
     ; Start by drawing the menu bar
-    call _editor_view_init
+    call editor_view_init
     pop de
     push de
-    call _editor_model_init
+    call editor_model_init
     call _editor_controller_init
     ; If a file was provided, no need to write the test data
     pop de
@@ -61,8 +76,8 @@ _editor_main_loop:
 
 
     ; Parameters:
-    ;   BC - 0 if no argument, 1 else
-    ;   DE - Address of the string
+    ;   DE - Address of the NULL-terminated string
+    ;   BC - Length of the string
     ; Returns:
     ;   DE - Processed argument, NULL if not valid
 process_argument:
