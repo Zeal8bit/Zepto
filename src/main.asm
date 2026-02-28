@@ -4,6 +4,7 @@
 
     INCLUDE "zos_sys.asm"
     INCLUDE "zos_keyboard.asm"
+    INCLUDE "zos_video.asm"
 
     ; Linker script part
     SECTION TEXT
@@ -429,6 +430,10 @@ controller_cancelled:
 controller_save_exit:
     call model_save_file
 controller_exit:
+    ; Clear the screen before exiting
+    ld h, DEV_STDOUT
+    ld c, CMD_CLEAR_SCREEN
+    IOCTL()
     EXIT()
 
     ; Ask the user whether he wants to save the file or not
