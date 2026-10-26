@@ -47,36 +47,42 @@ Regarding the current limitations:
 
 ### Requirements
 
-At the moment, the project has only been assembled on Linux (Ubuntu 20.04 and 22.04), it should be compatible with Mac OS and Windows as long as you have:
+The recommended build environment is [Zeal Development Environment (ZDE)](https://github.com/Zeal8bit/zeal-dev-environment), which provides the Zeal CMake toolchain and z88dk tools.
 
-* bash
-* git (to clone this repo)
-* make
-* Zeal 8-bit OS source code. Only the `kernel_headers` directory is required
+For a native build, install:
+
+* Git (also used to embed the current revision in the title bar)
+* CMake 3.16 or later and a supported build tool, such as Make or Ninja
+* A current Zeal 8-bit OS checkout containing `cmake/` and `sdk/z88dk-z80asm/`
 * Zeal 8-bit OS v0.3.0 or above on the target computer. The older versions don't implement cursor and video APIs
-* z88dk v2.2 (or later). Only its assembler, `z80asm`, is strictly required. The latest version of `z80asm` must be used as earlier versions don't have support for `MACRO`.
+* z88dk v2.2 (or later), including `z88dk-z80asm` and `z88dk-dis`. The assembler must support `MACRO`.
 
 To install z88dk, please [check out their Github project](https://github.com/z88dk/z88dk).
 
 ### Building
 
-To build the program, define the path to Zeal 8-bit OS, this will let us find the header files used to assemble zepto:
+From the project directory, configure and build with ZDE:
+```sh
+zde cmake
 ```
+
+For a native build, set the path to Zeal 8-bit OS and run CMake:
+```sh
 export ZOS_PATH=/your/path/to/Zeal8bitOS
-```
-Then simply use the command:
-```
-make
+cmake -S . -B build
+cmake --build build
 ```
 
-After compiling, the folder `bin/` should contain the binary `zepto.bin`. This file can be then loaded to Zeal 8-bit OS through UART thanks to the `load` command.
+The project selects Zeal's `z88dk` ASM toolchain, which supplies the SDK header path. The deprecated project Makefile and `zde make` are no longer used.
 
-The binary can also be embedded within the `romdisk` that will contain both the OS and a read-only file system. For example:
+After compiling, `bin/` contains `zepto.bin`, its symbol map (`zepto.map`), and disassembly (`zepto.dump`). Objects and the generated `version.txt` stay in `build/`. The binary retains its load address of `0x4000` and can be loaded through UART using the `load` command.
+
+To clean the build outputs:
+```sh
+zde cmake build --target clean
 ```
-cd $ZOS_PATH
-export EXTRA_ROMDISK_FILES="/path/to/zepto/bin/zepto.bin"
-make
-```
+
+The binary can also be embedded in an OS romdisk. With ZDE, stage it using `zde image romdisk add bin/zepto.bin`, then follow the [ZDE image documentation](https://github.com/Zeal8bit/zeal-dev-environment/blob/main/docs/image.md) to build the image.
 
 More info about compiling Zeal 8-bit OS [here](https://github.com/Zeal8bit/Zeal-8-bit-OS#getting-started).
 
