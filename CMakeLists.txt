@@ -21,7 +21,12 @@ set_target_properties(zepto PROPERTIES
     SUFFIX ".bin"
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Disassemble.cmake")
 target_link_options(zepto PRIVATE -m)
-target_include_directories(zepto PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+# The toolchain only initializes CMAKE_ASM_FLAGS when the build directory is
+# first configured, so spell out the SDK include path here: an existing build
+# directory created before ZOS moved its headers to sdk/z88dk-z80asm/ would
+# otherwise keep the stale kernel_headers/ include path.
+set(ZOS_SDK_DIR "$ENV{ZOS_PATH}/sdk/z88dk-z80asm")
+target_include_directories(zepto PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${ZOS_SDK_DIR}")
 
 # Check Git on every build, but only reassemble when the version actually changes.
 add_custom_target(zepto_version
@@ -39,10 +44,10 @@ set_source_files_properties(src/view.asm PROPERTIES
 
 # The ZOS z88dk toolchain disables automatic include dependency generation.
 set(zos_headers
-    "$ENV{ZOS_PATH}/sdk/z88dk-z80asm/zos_sys.asm"
-    "$ENV{ZOS_PATH}/sdk/z88dk-z80asm/zos_err.asm"
-    "$ENV{ZOS_PATH}/sdk/z88dk-z80asm/zos_keyboard.asm"
-    "$ENV{ZOS_PATH}/sdk/z88dk-z80asm/zos_video.asm"
+    "${ZOS_SDK_DIR}/zos_sys.asm"
+    "${ZOS_SDK_DIR}/zos_err.asm"
+    "${ZOS_SDK_DIR}/zos_keyboard.asm"
+    "${ZOS_SDK_DIR}/zos_video.asm"
 )
 set_property(SOURCE src/main.asm src/model.asm src/view.asm APPEND PROPERTY
     OBJECT_DEPENDS ${zos_headers})

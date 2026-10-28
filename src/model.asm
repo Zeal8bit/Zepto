@@ -16,7 +16,9 @@
     EXTERN _editor_view_goto_newline
     EXTERN _editor_view_cursor_prev_line
     EXTERN _editor_view_cursor_prev_line
-    EXTERN _editor_view_8bit_var
+    EXTERN _editor_view_join_previous_line
+    EXTERN _editor_view_join_next_line
+    EXTERN _editor_view_redraw_current_line_and_restore
     EXTERN _editor_view_cursor_next_line
     EXTERN _editor_view_init_new_line
     EXTERN _editor_view_restore_cursor
@@ -39,6 +41,7 @@
     ; DEFC BUFFER_MAX_SIZE = 32*1024
     ; DEFC BUFFER_END_ADDRESS = _start_buffer + BUFFER_MAX_SIZE - 1
     DEFC BUFFER_MAX_LINE_LENGTH = 0xFFFF
+    DEFC MODEL_SAVE_CHUNK = 128
 
     DEFC EDITOR_MAX_LINE = (40 - 1) - 4
 
@@ -94,11 +97,20 @@ editor_model_init:
     DSTAT()
     or a
     jp nz, _editor_model_init_error
-    ; Make sure the file size doesn't go above the limit
+    ; Make sure the file size doesn't go above the limit.
+    ; The stat structure starts with a flags byte, followed by a 32-bit
+    ; little-endian size. Only files fitting in 16 bits can be opened, as the
+    ; buffer itself is smaller than 64KB.
     ex de, hl
+    inc hl          ; Skip the flags field
     ld e, (hl)
     inc hl
     ld d, (hl)
+    inc hl
+    ld a, (hl)
+    inc hl
+    or (hl)
+    jp nz, _editor_model_init_error
     ; DE contains the size of the file, calculate the maximum file size in HL:
     ; HL = BUFFER_END_ADDRESS - _start_buffer + 1
     ; BC is free to use here
@@ -107,42 +119,81 @@ _free_size:
     ld hl, (_buffer_memory_end)
     add hl, bc
     ; HL now contains the maximum number of bytes
-    sbc hl, de  ; C is 0 already
+    or a
+    sbc hl, de
     jp c, _editor_model_init_error
     ; TODO: check if the entry is a directory (once d_flags is part of stat structure)
-    ; We can start reading from the file, the buffer of destination is spread across
-    ; three virtual pages, so we will perform `read` three times if necessary.
-    ld de, BUFFER_START_ADDRESS
-    ; First bank finishes at 0x8000
-    ld bc, 0x8000 - BUFFER_START_ADDRESS
-    push bc
-    call _editor_model_read_bc
+    ; Now that the file is known to fit in the buffer, read it from the
+    ; beginning of the buffer. The kernel requires a read buffer to stay
+    ; within a single virtual page, so read at most up to the next page
+    ; boundary on each iteration.
+    ld (_model_file_size), de
+    ld hl, 0
+    ld (_model_bytes_read), hl
+_editor_model_read_loop:
+    ; HL = number of bytes left to read
+    ld hl, (_model_file_size)
+    ld bc, (_model_bytes_read)
+    or a
+    sbc hl, bc
+    jr z, _editor_model_read_done
+    ld (_model_remaining), hl
+    ; DE = destination address = BUFFER_START + bytes read
+    ld hl, BUFFER_START_ADDRESS
+    add hl, bc
+    ex de, hl
+    ; BC = number of bytes until the end of the current virtual page
+    ld a, d
+    and 0xc0
+    add 0x40
+    ld b, a
+    ld c, 0
+    push de
+    ld h, b
+    ld l, c
+    or a
+    sbc hl, de
+    ld b, h
+    ld c, l
+    pop de
+    ; Read at most the remaining file size or the page boundary, whichever
+    ; comes first
+    ld hl, (_model_remaining)
+    call _buffer_min_hl_bc
+    ld a, (_model_file_dev)
+    ld h, a
+    READ()
+    or a
+    jp nz, _editor_model_init_error
+    ; Stop if the host returned no data
+    ld a, b
+    or c
+    jr z, _editor_model_read_done
+    ; Account for the bytes read and continue
+    ld hl, (_model_bytes_read)
+    add hl, bc
+    ld (_model_bytes_read), hl
+    jr _editor_model_read_loop
+
+_editor_model_read_done:
     ; We can now close the file
     ld a, (_model_file_dev)
     ld h, a
     CLOSE()
-    ; DE contains the remaining size in the buffer, so the size read from the
-    ; file is BC - DE
-    or a    ; clear carry flag
-    pop hl
-    sbc hl, de
-    ; If BC is 0, we have nothing to read more from the file, else, we have to
-    ; continue reading, inside the rest of the buffer.
+    ; Copy the file content to the end of the buffer
+    ld bc, (_model_bytes_read)
+    ld de, (_buffer_memory_end)
+    ; An empty file has nothing to copy. LDDR with BC = 0 would copy 64KB.
     ld a, b
     or c
-    ; TODO: Support copying to the next buffers
-    jp nz, _editor_model_open_error
-    ; Copy the file content to the end of the buffer
-    ld de, (_buffer_memory_end)
-    ; Copy the file size (number of bytes to copy) in BC
-    ld b, h
-    ld c, l
+    jr z, _editor_model_file_copied
     ; Calculate the address of the last byte of the loaded file
     ld hl, BUFFER_START_ADDRESS
     add hl, bc
     ; HL points to the next free character, decrement it to point to the last char of the file
     dec hl
     lddr
+_editor_model_file_copied:
     ; Copy the characters to the view, DE contains the address of the first char (-1)
     ; Set the right cursor to this value
     ld (_buffer_right_addr), de
@@ -222,36 +273,6 @@ _editor_model_line_length:
     ret
 
 
-_editor_model_read_bc:
-    ; Put the opened file dev in H
-    ld a, (_model_file_dev)
-    ld h, a
-    ; Save the maximum size to read on the stack
-    push bc
-    READ()
-    ; BC contains the number of bytes read from the file
-    pop hl
-    or a
-    jp nz, _editor_model_init_error
-    ; Carry flag is 0 because of `or a`
-    sbc hl, bc
-    ; Put the result in DE
-    ex de, hl
-    ; If the result is 0, we have to read in the next buffer
-    ret z
-    ; If BC is 0, we finished reading the file
-    ld a, b
-    or c
-    ret z
-    ; Else, continue reading the file, maximum remaining size is in DE,
-    ; HL is the destination of the buffer.
-    add hl, bc
-    ex de, hl
-    ld b, h
-    ld c, l
-    jp _editor_model_read_bc
-
-
 _editor_model_open_error:
     ; If the error is "ERR_NO_SUCH_ENTRY", it's not really an error as we will
     ; create this file, so don't exit is that case
@@ -275,6 +296,7 @@ _editor_model_error_str_end:
 _buffer_size_right_line:
     ld hl, (_buffer_cur_length)
     ld bc, (_buffer_col_num)
+    or a    ; Clear carry before subtracting
     sbc hl, bc
     ret
 
@@ -400,6 +422,112 @@ _buffer_remove_char_at_cursor:
     jp _editor_view_insert_string_before_cursor
 
 
+    ; Join the current line with the previous one. The cursor must be on the
+    ; first column and the current line must not be the first one.
+    ; This removes the '\n' separating both lines and puts the cursor at the
+    ; end of the previous line, as if the user had pressed BACKSPACE there.
+    ; Parameters:
+    ;   None
+    ; Returns:
+    ;   None
+    PUBLIC _buffer_join_previous_line
+_buffer_join_previous_line:
+    ; Update the line index and the total number of lines
+    ld hl, (_buffer_line_num)
+    dec hl
+    ld (_buffer_line_num), hl
+    ld hl, (_buffer_line_count)
+    dec hl
+    ld (_buffer_line_count), hl
+    ; The separator to delete is the last character on the left side of the gap
+    ld hl, (_buffer_left_addr)
+    dec hl
+    push hl
+    ; Calculate the length of the previous line, it becomes the new column
+    call _buffer_previous_line_length
+    ld (_buffer_col_num), hl
+    ; The merged line length is the sum of both line lengths
+    ld de, (_buffer_cur_length)
+    add hl, de
+    ld (_buffer_cur_length), hl
+    ; Delete the '\n' by moving the gap over it
+    pop hl
+    ld (_buffer_left_addr), hl
+    ; Redraw the merged line and the lines that follow it
+    jp _editor_view_join_previous_line
+
+
+    ; Join the next line into the current one. The cursor must be at the end
+    ; of the current line and a next line must exist.
+    PUBLIC _buffer_join_next_line
+_buffer_join_next_line:
+    ; Remove one line from the count
+    ld hl, (_buffer_line_count)
+    dec hl
+    ld (_buffer_line_count), hl
+    ; The next line starts right after the '\n' located at right_addr + 1
+    ld hl, (_buffer_right_addr)
+    inc hl
+    inc hl
+    call _buffer_next_line_length
+    ; The merged line is the sum of both line lengths
+    ld de, (_buffer_cur_length)
+    add hl, de
+    ld (_buffer_cur_length), hl
+    ; Delete the '\n' by moving the gap over it
+    ld hl, (_buffer_right_addr)
+    inc hl
+    ld (_buffer_right_addr), hl
+    ; Redraw the merged line and the lines that follow it
+    jp _editor_view_join_next_line
+
+
+    ; Move the cursor to the beginning of the current line.
+    PUBLIC model_cursor_home
+model_cursor_home:
+    ld hl, (_buffer_col_num)
+    ld a, h
+    or l
+    jr z, _model_cursor_home_redraw
+    ld hl, 0
+    call model_move_cursor_left_to
+_model_cursor_home_redraw:
+    jp _editor_view_redraw_current_line_and_restore
+
+
+    ; Move the cursor to the end of the current line.
+    PUBLIC model_cursor_end
+model_cursor_end:
+    ld hl, (_buffer_cur_length)
+    call model_move_cursor_right_to
+    jp _editor_view_redraw_current_line_and_restore
+
+
+    ; Remove the character under the cursor. At the end of the line, join the
+    ; next line into the current one instead. Do nothing on the last line.
+    PUBLIC model_delete
+model_delete:
+    ld hl, (_buffer_col_num)
+    ld de, (_buffer_cur_length)
+    or a
+    sbc hl, de
+    ; If col < cur_length, there is a character to delete on this line
+    jr c, _model_delete_char
+    ; At the end of the line, check that a next line exists
+    ld hl, (_buffer_line_num)
+    inc hl
+    ld de, (_buffer_line_count)
+    or a
+    sbc hl, de
+    ret nc
+    jp _buffer_join_next_line
+
+_model_delete_char:
+    ; Move the cursor over the character, then delete it as a backspace would
+    call _buffer_next_char
+    jp _buffer_remove_char_at_cursor
+
+
     ; Move the cursor of the buffer left down to the given cursor
     ; No check will be performed here.
     ; Parameters:
@@ -423,6 +551,40 @@ model_move_cursor_left_to:
     inc hl
     ld (_buffer_left_addr), hl
     ld (_buffer_right_addr), de
+    ret
+
+
+    ; Move the cursor of the buffer right to the given column.
+    ; The given column must be between the current column and the current line
+    ; length (inclusive). No check is performed here.
+    ; Parameters:
+    ;   HL - New cursor index
+    ; Returns:
+    ;   None
+model_move_cursor_right_to:
+    push hl                 ; Save the target column
+    ld de, (_buffer_col_num)
+    or a
+    sbc hl, de              ; HL = number of characters to move
+    jr z, _model_move_cursor_right_done
+    jr c, _model_move_cursor_right_abort
+    ld b, h
+    ld c, l
+    ; LDIR copies from HL to DE: source is the right side, destination is the
+    ; left side.
+    ld de, (_buffer_left_addr)      ; Destination
+    ld hl, (_buffer_right_addr)
+    inc hl                          ; Source
+    ldir
+    ld (_buffer_left_addr), de
+    dec hl
+    ld (_buffer_right_addr), hl
+_model_move_cursor_right_done:
+    pop hl
+    ld (_buffer_col_num), hl
+    ret
+_model_move_cursor_right_abort:
+    pop hl
     ret
 
 
@@ -738,6 +900,7 @@ _buffer_previous_line_length:
     cpdr
     ; When found, length of line is BUFFER_MAX_LINE_LENGTH - BC
     ld hl, BUFFER_MAX_LINE_LENGTH
+    or a    ; Clear carry, CPDR doesn't guarantee it
     sbc hl, bc
     ret
 
@@ -822,6 +985,7 @@ _buffer_next_line_length:
     cpir
     ; When found, length of line is BUFFER_MAX_LINE_LENGTH - BC
     ld hl, BUFFER_MAX_LINE_LENGTH
+    or a    ; Clear carry, CPIR doesn't guarantee it
     sbc hl, bc
     ret
 
@@ -914,7 +1078,8 @@ model_save_file:
     ld de, (_buffer_memory_end)
     ld hl, (_buffer_right_addr)
     ex de, hl
-    sbc hl, de  ; carry flag is already 0
+    or a    ; Clear carry before subtracting
+    sbc hl, de
     ld b, h
     ld c, l
     ex de, hl
@@ -933,7 +1098,10 @@ model_save_file:
 model_print_error_neg:
     neg
 model_print_error:
-    ld hl, str_error_code
+    ; Convert the error code in A to decimal in str_error_code
+    ld l, a
+    ld h, 0
+    ld de, str_error_code
     call model_show_location_to_decimal
     ld (hl), 0
     ld hl, str_error_msg
@@ -957,77 +1125,62 @@ str_error_code: DEFS 3
     ;   A, BC, DE, HL
 model_save_buffer:
     ld (_model_file_dev), a
-model_save_buffer_descriptor_saved:
-    ; If BC is 0, return success directly
-    ld a, b
-    or c
+    ld (_save_ptr), hl
+    ld (_save_left), bc
+_model_save_loop:
+    ; Stop when there is nothing left to write
+    ld hl, (_save_left)
+    ld a, h
+    or l
     ret z
-    ; Check if the buffer goes beyond one virtual page (the kernel would refuse it else)
+    ; chunk = min(remaining, MODEL_SAVE_CHUNK)
+    ld de, MODEL_SAVE_CHUNK
     push hl
-    ld a, h
-    ; Get the virtual page of HL and store it in D
-    and 0xc0
-    ld d, a
-    ; Get the address of the last char of the buffer
-    dec hl
-    add hl, bc
-    ; Get the virtual page of this new address
-    ld a, h
-    and 0xc0
-    ld h, a
-    ; If it is the same as the former one, the buffer doesn't cross-boundary, we have to call
-    ; WRITE syscall only once
-    cp d
-    jr z, model_save_buffer_not_cross_boundary
-    ; The buffer crosses boundaries, at most 3, the first address to write is the original one, but
-    ; we need to modify the size.
-    pop hl  ; Original buffer address
-    ; Calculate the boundary address out of the virtual page count
-    ld a, d
-    add 0x40    ; the virtual page is not 3 for sure, so increment it by 1
-    ld d, a
-    ld e, 0
-    push de     ; save next virtual size to write
-    ; DE contains the end of page address, calculate the new size
-    push bc ; Save original size
-    ex de, hl
     or a
     sbc hl, de
-    ; Size is in HL
-    ld b, h
-    ld c, l
-    ; Buffer is in DE, write now
-    call model_save_buffer_not_cross_boundary_buffer_in_de
-    ; Calculate remaining size to write
     pop hl
+    jr c, _model_save_chunk_size_ready
+    ld hl, de
+_model_save_chunk_size_ready:
+    ; Cap the chunk to the space left in the current virtual page
+    push hl                     ; Save chunk
+    ld hl, (_save_ptr)
+    ld a, h
+    and 0xc0
+    add 0x40
+    ld d, a
+    ld e, 0                     ; DE = end of the current virtual page
+    ex de, hl                   ; DE = buffer, HL = page end
     or a
-    sbc hl, bc
-    ; Put the remaining size in BC
-    ld b, h
-    ld c, l
-    ; Pop the next buffer to write
-    pop hl
-    ; If there was no error, continue writing
+    sbc hl, de                  ; HL = page space
+    ex de, hl                   ; DE = page space, HL = buffer
+    pop bc                      ; BC = chunk
+    push hl                     ; Save buffer
+    ld h, d
+    ld l, e                     ; HL = page space
     or a
-    jp z, model_save_buffer_descriptor_saved
-    ; Else, return directly
-    ret
-
-    ; Parameters:
-    ;   (_model_file_dev) - Opened descriptor
-    ;   [SP] - Address of the buffer to print
-    ;   BC - Size of the buffer to print
-    ; Returns:
-    ;   BC - Number of bytes written
-model_save_buffer_not_cross_boundary:
-    ; Buffer to write to file in DE
-    pop de
-model_save_buffer_not_cross_boundary_buffer_in_de:
-    ; Opened descriptor in H
+    sbc hl, bc                  ; page space - chunk
+    jr nc, _model_save_chunk_ok ; page space >= chunk
+    ld b, d
+    ld c, e                     ; chunk = page space
+_model_save_chunk_ok:
+    ld (_save_chunk), bc
+    pop de                      ; DE = buffer
     ld a, (_model_file_dev)
     ld h, a
     WRITE()
-    ret
+    or a
+    ret nz
+    ; Account for the bytes actually written and continue
+    ld hl, (_save_ptr)
+    add hl, bc
+    ld (_save_ptr), hl
+    ld hl, (_save_left)
+    or a
+    sbc hl, bc
+    ld (_save_left), hl
+    jr _model_save_loop
+
 
     ; Show the current current of the cursor in the notification bar
     PUBLIC model_show_location
@@ -1106,6 +1259,7 @@ loc_line:  DEFS 20
     ; Returns:
     ;   HL - Result
     ;   A  - Remainder
+    PUBLIC _model_divide_hl_c
 _model_divide_hl_c:
    xor a
    ld b, 16
@@ -1126,12 +1280,22 @@ _model_divide_hl_next:
     SECTION DATA
 _model_full_path: DEFS 2
 _model_file_dev: DEFS 1
+_save_ptr: DEFS 2
+_save_left: DEFS 2
+_save_chunk: DEFS 2
+    ; File loading state: total size, bytes already read, bytes left
+_model_file_size: DEFS 2
+_model_bytes_read: DEFS 2
+_model_remaining: DEFS 2
     ; Split buffer related
     ; Current length of the line, in bytes
+    PUBLIC _buffer_cur_length
 _buffer_cur_length: DEFS 2
     ; Contains the line number the cursor is currently at
+    PUBLIC _buffer_line_num
 _buffer_line_num: DEFS 2
     ; Same for the column
+    PUBLIC _buffer_col_num
 _buffer_col_num: DEFS 2
     ; Contains the number of lines
 _buffer_line_count: DEFS 2
@@ -1140,4 +1304,5 @@ _buffer_left_addr: DEFS 2
     ; Same but for the RIGHT cursor
 _buffer_right_addr: DEFS 2
     ; Last valid memory address, in other words, maximum value of _buffer_right_addr
+    PUBLIC _buffer_memory_end
 _buffer_memory_end: DEFS 2

@@ -27,6 +27,8 @@ Zepto is still in alpha, here are the features implemented:
 * Use Controller-Model-View architecture
 * Open an existing file given as a parameter
 * Edit the file content, can split lines, can add characters at the beginning, at the middle and at the end of lines
+* Join a line with the previous one by pressing `Backspace` at the beginning of a line, which removes empty lines
+* Support `Home`/`End` navigation and the `Delete` key, including joining the next line at the end of a line
 * Support upper, lower case and special characters
 * Support scrolling up and down in the file
 * Support `Ctrl + Key` for menu selection
@@ -38,10 +40,12 @@ Zepto is still in alpha, here are the features implemented:
 Regarding the current limitations:
 
 * Screen size is hardcoded to 80x40 characters. In the future, it should use Zeal 8-bit OS video API to get the screen area size
-* Doesn't support memory paging, so the maximum file size is limited by the amount of RAM mapped at once: around 40KB
-* No way to remove an empty line. Once a new line is created, it cannot be removed, it'll always be in the file
+* Does not support memory paging; the maximum file size is limited by the stack position. On the emulator, files up to about 12KB can be opened, although the buffer itself has room for around 40KB
 * It is not possible to modify the file destination once the file is opened. For example, if the file `B:/file.txt` is opened, it is not possible to save it under a new name
 * Copy/Paste/Cut/Help/Open File/New File are not implemented
+* No text selection, undo/redo or search yet
+* A trailing empty line (for example `abc\n\n`) is not counted as a separate line when the file is loaded
+* On the emulator's HostFS path, saving a file larger than about 256 bytes currently fails after the first write; larger files can still be opened and edited. This appears to be a host filesystem limitation and is under investigation
 
 ## Building the project
 

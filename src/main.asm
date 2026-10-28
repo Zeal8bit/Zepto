@@ -22,6 +22,12 @@
     EXTERN _buffer_insert_char_at_cursor
     EXTERN _buffer_insert_new_line
     EXTERN _buffer_remove_char_at_cursor
+    EXTERN _buffer_join_previous_line
+    EXTERN model_cursor_home
+    EXTERN model_cursor_end
+    EXTERN model_delete
+    EXTERN _buffer_col_num
+    EXTERN _buffer_line_num
     EXTERN _buffer_previous_char
     EXTERN _buffer_next_char
     EXTERN _buffer_previous_line
@@ -336,7 +342,25 @@ _editor_event_process_special_ascii:
     cp KB_KEY_ENTER
     jp z, _buffer_insert_new_line
     cp KB_KEY_BACKSPACE
-    jp z, _buffer_remove_char_at_cursor
+    jr nz, _editor_special_not_backspace
+    ; At the beginning of a line, remove the newline that separates it from
+    ; the previous line (unless this is the first line)
+    ld hl, (_buffer_col_num)
+    ld a, h
+    or l
+    jp nz, _buffer_remove_char_at_cursor
+    ld hl, (_buffer_line_num)
+    ld a, h
+    or l
+    ret z
+    jp _buffer_join_previous_line
+_editor_special_not_backspace:
+    cp KB_HOME
+    jp z, model_cursor_home
+    cp KB_END
+    jp z, model_cursor_end
+    cp KB_DELETE
+    jp z, model_delete
     cp KB_LEFT_ARROW
     jp z, _buffer_previous_char
     cp KB_RIGHT_ARROW
