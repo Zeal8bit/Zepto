@@ -45,7 +45,7 @@ Regarding the current limitations:
 * Copy/Paste/Cut/Help/Open File/New File are not implemented
 * No text selection, undo/redo or search yet
 * A trailing empty line (for example `abc\n\n`) is not counted as a separate line when the file is loaded
-* On the emulator's HostFS path, saving a file larger than about 256 bytes currently fails after the first write; larger files can still be opened and edited. This appears to be a host filesystem limitation and is under investigation
+* Saving removes and recreates the destination file to work around a HostFS truncation issue with existing files larger than 256 bytes. A failed save can therefore lose the previous content; an atomic save is a future improvement
 
 ## Building the project
 

@@ -1051,6 +1051,12 @@ _buffer_next_line_cursor_no_copy:
 model_save_file:
     ld hl, str_saving
     call editor_show_notification
+    ; Remove the destination first. On HostFS, truncating an existing file
+    ; larger than 256 bytes leaves the old size in the opened file structure,
+    ; which makes the following writes fail. Removing it makes the OPEN below
+    ; create a fresh file. The result is ignored as the file may not exist.
+    ld de, (_model_full_path)
+    RM()
     ld bc, (_model_full_path)
     ld h, O_WRONLY | O_CREAT | O_TRUNC
     OPEN()
